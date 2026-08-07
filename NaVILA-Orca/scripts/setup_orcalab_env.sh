@@ -99,9 +99,19 @@ native_rpath = subprocess.check_output(
     [shutil.which("patchelf"), "--print-rpath", str(native_library)], text=True
 ).strip()
 expected_pyside = str(Path(PySide6.__file__).resolve().parent)
-if expected_pyside not in native_rpath.split(":"):
+expected_qt_lib = str(Path(PySide6.__file__).resolve().parent / "Qt" / "lib")
+import shiboken6
+expected_shiboken = str(Path(shiboken6.__file__).resolve().parent)
+missing_rpath = [
+    directory
+    for directory in (expected_pyside, expected_qt_lib, expected_shiboken)
+    if directory not in native_rpath.split(":")
+]
+if missing_rpath:
     raise SystemExit(
-        "OrcaLab native viewport points at a different Python environment. "
+        "OrcaLab native viewport is missing required library paths: "
+        + ", ".join(missing_rpath)
+        + ". "
         "Run ./NaVILA-Orca/scripts/setup_orcalab_env.sh to repair it."
     )
 

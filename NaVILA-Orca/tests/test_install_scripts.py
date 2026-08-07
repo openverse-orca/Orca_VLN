@@ -163,6 +163,7 @@ def test_system_dependency_check_reports_missing_qt_xcb_package(
     assert result.returncode == 2
     assert "libxcb-cursor0" in result.stderr
     assert "libopengl0" in result.stderr
+    assert "libxcb-xinput0" in result.stderr
     assert "setup_system_deps.sh" in result.stderr
 
 
@@ -200,6 +201,8 @@ def test_orcalab_runtime_pins_the_cuda_12_8_wheel_pair() -> None:
     assert "/whl/cu128" in setup
     assert '"torch==${TORCH_VERSION}+cu128"' in setup
     assert 'require_equal("torch CUDA build", torch.version.cuda, "12.8")' in setup
+    assert "expected_qt_lib" in setup
+    assert "expected_shiboken" in setup
 
 
 def test_blackwell_cuda_preflight_rejects_a_pre_cuda_12_8_torch_build() -> None:
@@ -314,6 +317,11 @@ def test_orcalab_setup_prepares_native_viewport_before_first_gui() -> None:
     assert 'version("orcalab-pyside") == "26.7.1"' in resolver
     assert PYSIDE_SHA256 in preparer
     assert PAK_SHA256 in preparer
+    assert "url_version = ORCALAB_VERSION" in preparer
+    assert 'destination = user_root / f"orcalab-pyside-{url_version}"' in preparer
     assert '"--replace-needed"' in preparer
     assert "libPySideGameLauncher.so" in preparer
     assert "_glapi_tls_Current" in preparer
+    assert "libGL.so.1" in preparer
+    assert "qt_lib" in preparer
+    assert "shiboken" in preparer

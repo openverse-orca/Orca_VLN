@@ -147,17 +147,23 @@ def patch_native_runtime(root: Path) -> None:
         raise RuntimeError(f"pinned patchelf executable is missing: {patchelf}")
 
     import PySide6
+    import shiboken6
 
     pyside6 = Path(PySide6.__file__).resolve().parent
+    qt_lib = pyside6 / "Qt" / "lib"
+    shiboken = Path(shiboken6.__file__).resolve().parent
     python_lib = Path(sysconfig.get_config_var("LIBDIR")).resolve()
     dist = native_library.parent.resolve()
     host_opengl = system_opengl()
+    for directory in (pyside6, qt_lib, shiboken, python_lib, dist):
+        if not directory.is_dir():
+            raise RuntimeError(f"OrcaLab native library directory is missing: {directory}")
 
-    # OrcaLab 26.7.1 ships libOpenGL.so.0 without its matching
-    # libGLdispatch.so.0. On some driver/Ubuntu combinations this mixes two
-    # GLVND builds and fails with an undefined _glapi_tls_Current symbol.
-    # Patch only the two viewport consumers; keep all other packaged runtime
-    # libraries unchanged.
+    # Some OrcaLab 26.7.1 builds link against libOpenGL.so.0, which is shipped
+    # without its matching libGLdispatch.so.0, which can cause an undefined
+    # _glapi_tls_Current symbol. Other builds link against the system
+    # libGL.so.1 instead, which needs no replacement. Patch only the two
+    # viewport consumers; keep all other packaged runtime libraries intact.
     opengl_consumers = [native_library, dist / "libPySideGameLauncher.so"]
     for consumer in opengl_consumers:
         if not consumer.is_file():
@@ -165,7 +171,7 @@ def patch_native_runtime(root: Path) -> None:
         needed = subprocess.check_output(
             [str(patchelf), "--print-needed", str(consumer)], text=True
         ).splitlines()
-        current = next(
+        packaged_opengl = next(
             (
                 item
                 for item in needed
@@ -173,36 +179,54 @@ def patch_native_runtime(root: Path) -> None:
             ),
             None,
         )
-        if current is None:
-            raise RuntimeError(f"{consumer.name} does not declare libOpenGL.so.0")
-        if current != str(host_opengl):
+        if packaged_opengl is not None and packaged_opengl != str(host_opengl):
             subprocess.check_call(
                 [
                     str(patchelf),
                     "--replace-needed",
-                    current,
+                    packaged_opengl,
                     str(host_opengl),
                     str(consumer),
                 ]
             )
+        elif "libGL.so.1" not in needed:
+            raise RuntimeError(
+                f"{consumer.name} declares neither libOpenGL.so.0 nor libGL.so.1"
+            )
 
-    rpath = f"$ORIGIN:{pyside6}:{python_lib}:{dist}"
-    subprocess.check_call(
-        [str(patchelf), "--set-rpath", rpath, str(native_library)]
-    )
-    actual = subprocess.check_output(
-        [str(patchelf), "--print-rpath", str(native_library)], text=True
-    ).strip()
-    if actual != rpath:
-        raise RuntimeError(
-            f"OrcaLab native viewport RPATH mismatch: {actual!r} != {rpath!r}"
-        )
+    rpath = f"$ORIGIN:{pyside6}:{qt_lib}:{shiboken}:{python_lib}:{dist}"
+    for consumer in opengl_consumers:
+        actual = subprocess.check_output(
+            [str(patchelf), "--print-rpath", str(consumer)], text=True
+        ).strip()
+        if actual != rpath:
+            subprocess.check_call(
+                [str(patchelf), "--set-rpath", rpath, str(consumer)]
+            )
+        actual = subprocess.check_output(
+            [str(patchelf), "--print-rpath", str(consumer)], text=True
+        ).strip()
+        if actual != rpath:
+            raise RuntimeError(
+                f"{consumer.name} RPATH mismatch: {actual!r} != {rpath!r}"
+            )
+
     clean_environment = os.environ.copy()
     clean_environment.pop("LD_LIBRARY_PATH", None)
-    linked = subprocess.check_output(
-        ["ldd", str(native_library)], text=True, env=clean_environment
+    linked = "\n".join(
+        subprocess.check_output(
+            ["ldd", str(consumer)], text=True, env=clean_environment
+        )
+        for consumer in opengl_consumers
     )
-    if str(host_opengl) not in linked:
+    missing = [line.strip() for line in linked.splitlines() if "not found" in line]
+    if missing:
+        raise RuntimeError(
+            "OrcaLab native viewport dependencies are missing:\n"
+            + "\n".join(missing)
+            + "\nRun ./NaVILA-Orca/scripts/setup_system_deps.sh to install them."
+        )
+    if "libOpenGL.so.0" in linked and str(host_opengl) not in linked:
         raise RuntimeError(
             "OrcaLab native viewport does not resolve against the complete "
             f"host OpenGL stack:\n{linked}"
@@ -228,12 +252,12 @@ def main() -> int:
     user_root = (
         Path.home() / "Orca" / "OrcaStudio" / project_id / "user"
     )
-    # OrcaLab 26.7.1's own URL parser names this release "unknown". Keep the
-    # same paths and state value so its first GUI process recognizes the
-    # preinstalled official runtime instead of installing it again.
-    url_version = "unknown"
+    # Keep the extracted path and install state aligned with OrcaLab's own
+    # versioned installer. Otherwise the first GUI launch switches its
+    # editable package to an unpatched second copy.
+    url_version = ORCALAB_VERSION
     archive = user_root / f"python-project-{url_version}.tar.xz"
-    destination = user_root / "orcalab-pyside"
+    destination = user_root / f"orcalab-pyside-{url_version}"
     state_file = user_root / ".orcalab-pyside-install-state.json"
     pak = Path(get_cache_folder()) / Path(PAK_URL).name
 

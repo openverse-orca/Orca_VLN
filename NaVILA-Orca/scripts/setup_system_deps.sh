@@ -16,6 +16,7 @@ PACKAGES=(
   libxcb-image0
   libxcb-keysyms1
   libxcb-render-util0
+  libxcb-xinput0
   libxcb-util1
   libxcb-xinerama0
 )
